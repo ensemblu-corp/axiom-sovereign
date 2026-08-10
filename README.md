@@ -1,10 +1,34 @@
-# Axiom Sovereign
 
-The `axiom-sovereign` engine provides the high-performance parser for the Axiom ecosystem. It is a zero-dependency, structural assembly line designed for direct conversion of raw streams into persistent data structures.
+# ⚔️ Axiom Sovereign
 
-## 🏛️ Integration
+![Version](https://img.shields.io/badge/version-2.0.0-blue)
+![Java](https://img.shields.io/badge/Java-26-orange)
+![Depends](https://img.shields.io/badge/depends%20on-axiom-informational)
+![License](https://img.shields.io/badge/license-Limited%20Commercial-red)
 
-Summon the Sovereign engine into your project:
+**High-performance, byte-native structural parser for the Axiom ecosystem.**
+
+`axiom-sovereign` converts raw UTF-8 byte streams into immutable `PersistentMap` structures with zero intermediate `String` allocations where possible. It is the assembly line every schema-aware and language-level component feeds from.
+
+---
+
+## What it does
+
+- Parses Axiom DOP (Data-Oriented Protocol) documents **natively from `byte[]`**
+- Emits locked, immutable `PersistentMap` / nested structures
+- Enforces structural compliance at the boundary
+- Zero reflection, zero annotations, zero third-party JSON libraries
+
+---
+
+## Requirements
+
+- **Java 26**
+- [`axiom`](https://github.com/ensemblu-corp/axiom) `2.0.0` (pulled transitively)
+
+---
+
+## Installation
 
 **Maven**
 
@@ -22,28 +46,93 @@ Summon the Sovereign engine into your project:
 implementation("com.ensemblu:axiom-sovereign:2.0.0")
 ```
 
-## ⚖️ Sovereign Law
+---
 
-This engine operates on the foundational principles of Data-Oriented Programming.
-
--   **Normalization**: All input streams processed by `AxiomDopParser` must be pre-validated for structural compliance.
-
--   **Immutability**: The output is a `PersistentMap`—a locked, immutable structural node. Any further mutation must be handled via the Axiom command cycle.
-
--   **Zero-Heap**: The parser is optimized for low-latency traversal. Do not attempt to re-instantiate the engine; use the static entry point.
-
-
-## ⚡ Operational Entry
-
-Access the assembly line via the static `parse` gate:
-
+## Quick start (2.0.0 API)
 
 ```java
 import com.ensemblu.axiom.sovereign.parser.AxiomDopParser;
+import java.nio.charset.StandardCharsets;
 
-// Direct execution
-final var result = AxiomDopParser.take(inputString.getBytes(StandardCharsets.UTF_8)).openBuffer().parse();
+byte[] raw = """
+    {
+      name: "Ada"
+      age: 36
+    }
+    """.getBytes(StandardCharsets.UTF_8);
+
+var data = AxiomDopParser.take(raw)
+    .openBuffer()
+    .parse();
 ```
-## 📜 Legal
 
-This project is governed by the principles of immutable software architecture. See `LICENSE.md` for the specific terms of use.
+> [!IMPORTANT]
+> **Breaking change from 1.0.0**  
+> `AxiomDopParser.take(String)` has been replaced by `take(byte[])`.  
+> Always pass UTF-8 bytes. Do not re-instantiate the engine — use the static entry point.
+
+---
+
+## Sovereign law
+
+| Principle | Meaning |
+|-----------|---------|
+| **Normalization** | Input must be structurally sound; the parser validates as it walks |
+| **Immutability** | Output is a frozen `PersistentMap` — further change goes through the Axiom command cycle |
+| **Byte-native** | Operates on raw bytes to avoid intermediate string allocations |
+| **Static entry** | Single static gate: `AxiomDopParser.take(byte[])` |
+
+---
+
+## Package structure
+
+```
+com.ensemblu.axiom.sovereign
+└── parser
+    └── AxiomDopParser.java    // take(byte[]) → Initial → parse()
+```
+
+---
+
+## How it fits in the stack
+
+```text
+raw bytes
+    │
+    ▼
+AxiomDopParser.take(byte[])     ← this module
+    │
+    ▼
+PersistentMap
+    │
+    ├── SchemaGuard (axiom-language)
+    ├── application logic (axiom)
+    └── materializers / binders (axiom-spec)
+```
+
+---
+
+## Design notes
+
+- String materialisation happens only when a value is actually needed (`new String(src, start, len, UTF_8)`).
+- Peek / next operate on `byte`; structural tokens are compared as `(byte) '{'`, etc.
+- Empty content and missing opening `{` are rejected early with clear structural failures.
+
+---
+
+## Related modules
+
+| Module | Relationship |
+|--------|----------------|
+| `axiom` | Provides `PersistentMap`, `Dop`, `Result` |
+| `axiom-language` | Consumes this parser via `SchemaGuard` |
+| `axiom-spec` | Sibling parsers for CSV / JSON / SQL |
+
+---
+
+## Legal
+
+Limited Commercial License — free for evaluation, testing, and non-commercial development.  
+Commercial or production use requires a paid annual contract from Ensemblu Corp.
+
+See `LICENSE.md`. Contact: **contact@ensemblu.com**
