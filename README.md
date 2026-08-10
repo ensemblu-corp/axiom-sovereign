@@ -42,7 +42,7 @@ Access the assembly line via the static `parse` gate:
 import com.ensemblu.axiom.sovereign.parser.AxiomDopParser;
 
 // Direct execution
-final var result = AxiomDopParser.take(input).openBuffer().parse();
+final var result = AxiomDopParser.take(inputString.getBytes(StandardCharsets.UTF_8)).openBuffer().parse();
 ```
 ## 📜 Legal
 
