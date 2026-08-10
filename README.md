@@ -12,14 +12,14 @@ Summon the Sovereign engine into your project:
 <dependency>
     <groupId>com.ensemblu</groupId>
     <artifactId>axiom-sovereign</artifactId>
-    <version>1.0.0</version>
+    <version>2.0.0</version>
 </dependency>
 ```
 
 **Gradle**
 
 ```groovy
-implementation("com.ensemblu:axiom-sovereign:1.0.0")
+implementation("com.ensemblu:axiom-sovereign:2.0.0")
 ```
 
 ## ⚖️ Sovereign Law
@@ -42,7 +42,7 @@ Access the assembly line via the static `parse` gate:
 import com.ensemblu.axiom.sovereign.parser.AxiomDopParser;
 
 // Direct execution
-final var result = AxiomDopParser.take(inputString).openBuffer().parse();
+final var result = AxiomDopParser.take(input).openBuffer().parse();
 ```
 ## 📜 Legal
 
