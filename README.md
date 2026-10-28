@@ -1,30 +1,41 @@
-
-# ⚔️ Axiom Sovereign
-
-![Version](https://img.shields.io/badge/version-2.0.0-blue)
+![Version](https://img.shields.io/badge/version-3.0.0-blue)
 ![Java](https://img.shields.io/badge/Java-26-orange)
 ![Depends](https://img.shields.io/badge/depends%20on-axiom-informational)
 ![License](https://img.shields.io/badge/license-Limited%20Commercial-red)
 
-**High-performance, byte-native structural parser for the Axiom ecosystem.**
+# Axiom Sovereign (`axiom-sovereign`)
 
-`axiom-sovereign` converts raw UTF-8 byte streams into immutable `PersistentMap` structures with zero intermediate `String` allocations where possible. It is the assembly line every schema-aware and language-level component feeds from.
+> The sovereign assembly line: a zero-dependency, off-heap parser for Axiom's DOP (Data-Oriented Programming)
+> notation — the `.axiom` format used for schemas, journeys and declarative configuration.
 
----
-
-## What it does
-
-- Parses Axiom DOP (Data-Oriented Protocol) documents **natively from `byte[]`**
-- Emits locked, immutable `PersistentMap` / nested structures
-- Enforces structural compliance at the boundary
-- Zero reflection, zero annotations, zero third-party JSON libraries
+`axiom-sovereign` turns raw bytes held in a Panama `MemorySegment` into an immutable
+`PersistentMap<String, Object>`. It never builds an intermediate heap `String` of the whole document and never uses
+reflection. It is the grammar layer that `axiom-language` (schemas) sits on.
 
 ---
 
-## Requirements
+## Architecture overview
 
-- **Java 26**
-- [`axiom`](https://github.com/ensemblu-corp/axiom) `2.0.0` (pulled transitively)
+```
+ .axiom file / bytes
+        │  (memory-mapped or copied into an Arena)
+        ▼
+ MemorySegment ──► AxiomDopParser.take(segment)      ── Initial
+                       .openBuffer()                  ── Final
+                       .parse()                       ──► PersistentMap<String, Object>
+                                                           (values normalised via Dop.normalize)
+```
+
+| Layer | Responsibility |
+|---|---|
+| `AxiomDopParser` (public) | Curried entry point: `take → openBuffer → parse`. |
+| `NativeEngine` (private) | Single-pass cursor over the segment. Reads bytes with `ValueLayout.JAVA_BYTE`, only materialising the small slices that become keys and values. |
+
+Dependency graph:
+
+```
+axiom  ◄──  axiom-sovereign  ◄──  axiom-language
+```
 
 ---
 
@@ -36,103 +47,143 @@
 <dependency>
     <groupId>com.ensemblu</groupId>
     <artifactId>axiom-sovereign</artifactId>
-    <version>2.0.0</version>
+    <version>3.0.0</version>
 </dependency>
 ```
 
-**Gradle**
+This transitively brings in `com.ensemblu:axiom:3.0.0`.
 
-```groovy
-implementation("com.ensemblu:axiom-sovereign:2.0.0")
+**Gradle (Kotlin DSL)**
+
+```kotlin
+implementation("com.ensemblu:axiom-sovereign:3.0.0")
+```
+
+JPMS automatic module name: `com.ensemblu.axiom.sovereign`
+
+Runtime: JDK 26 with `--enable-preview`.
+
+---
+
+## The DOP notation
+
+A DOP document is a braced object of `key: value` pairs. It is deliberately looser than JSON so that
+hand-written schemas stay readable.
+
+| Construct | Example | Parsed as |
+|---|---|---|
+| Object | `{ a: 1, b: 2 }` | `PersistentMap<String, Object>` |
+| Array | `[ACTIVE, SUSPENDED]` | `PersistentList<Object>` |
+| Bare symbol | `ACTIVE` | `String` |
+| Quoted string | `"^.+@.+[.].+$"` | `String` (content taken verbatim, no escape processing) |
+| Triple-quoted string | `"""multi-line SQL"""` | `String` (verbatim, may span lines) |
+| Number | `320.0`, `5`, `-3` | Normalised number via `Dop.normalize` |
+| Boolean / null | `true`, `false`, `null` | `Boolean` / `null` (case-insensitive) |
+
+Rules worth knowing:
+
+- **Keys are bare symbols** — no quotes needed: `minLength: 5`.
+- **Commas are optional between entries on separate lines**: a value ends at `,`, `}`, `]` or a line break.
+- Symbols are trimmed; anything that is not a number, boolean or `null` stays a `String`.
+- Use quotes (or triple quotes) for values containing `:`, `,`, braces or brackets.
+
+Example:
+
+```
+{
+  strict: true
+  required: [status, limit]
+  properties: {
+    status: { type: string, enum: [ACTIVE, INACTIVE, SUSPENDED] },
+    limit:  { type: integer, min: 1, max: 1000 }
+  }
+  query: """
+      SELECT * FROM accounts
+      WHERE status = :java.status
+  """
+}
 ```
 
 ---
 
-## Quick start (2.0.0 API)
+## Usage examples
+
+### Parse a classpath resource
 
 ```java
+import com.ensemblu.axiom.core.data_structure.map.PersistentMap;
 import com.ensemblu.axiom.sovereign.parser.AxiomDopParser;
-import java.nio.charset.StandardCharsets;
 
-byte[] raw = """
-    {
-      name: "Ada"
-      age: 36
-    }
-    """.getBytes(StandardCharsets.UTF_8);
+import java.lang.foreign.Arena;
+import java.lang.foreign.MemorySegment;
 
-var data = AxiomDopParser.take(raw)
-    .openBuffer()
-    .parse();
+try (var in = getClass().getClassLoader().getResourceAsStream("schemas/account.axiom");
+     var arena = Arena.ofConfined()) {
+
+    byte[] bytes = in.readAllBytes();
+    MemorySegment segment = arena.allocate(bytes.length);
+    segment.copyFrom(MemorySegment.ofArray(bytes));
+
+    PersistentMap<String, Object> doc = AxiomDopParser.take(segment).openBuffer().parse();
+
+    boolean strict = doc.targetKey("strict").toBooleanResult().getOrElse(false);
+}
 ```
 
-> [!IMPORTANT]
-> **Breaking change from 1.0.0**  
-> `AxiomDopParser.take(String)` has been replaced by `take(byte[])`.  
-> Always pass UTF-8 bytes. Do not re-instantiate the engine — use the static entry point.
+### Memory-map a file on disk (zero copy)
 
----
+```java
+import java.nio.channels.FileChannel;
+import java.nio.file.Path;
+import java.nio.file.StandardOpenOption;
 
-## Sovereign law
+try (var channel = FileChannel.open(Path.of("config/rules.axiom"), StandardOpenOption.READ);
+     var arena = Arena.ofConfined()) {
 
-| Principle | Meaning |
-|-----------|---------|
-| **Normalization** | Input must be structurally sound; the parser validates as it walks |
-| **Immutability** | Output is a frozen `PersistentMap` — further change goes through the Axiom command cycle |
-| **Byte-native** | Operates on raw bytes to avoid intermediate string allocations |
-| **Static entry** | Single static gate: `AxiomDopParser.take(byte[])` |
-
----
-
-## Package structure
-
-```
-com.ensemblu.axiom.sovereign
-└── parser
-    └── AxiomDopParser.java    // take(byte[]) → Initial → parse()
+    var segment = channel.map(FileChannel.MapMode.READ_ONLY, 0, channel.size(), arena);
+    var rules = AxiomDopParser.take(segment).openBuffer().parse();
+}
 ```
 
----
+### Parse an in-memory string
 
-## How it fits in the stack
-
-```text
-raw bytes
-    │
-    ▼
-AxiomDopParser.take(byte[])     ← this module
-    │
-    ▼
-PersistentMap
-    │
-    ├── SchemaGuard (axiom-language)
-    ├── application logic (axiom)
-    └── materializers / binders (axiom-spec)
+```java
+var segment = MemorySegment.ofArray("{ mode: fast, retries: 3 }".getBytes(StandardCharsets.UTF_8));
+var cfg = AxiomDopParser.take(segment).openBuffer().parse();
+int retries = cfg.targetKey("retries").toIntVal();
 ```
 
----
-
-## Design notes
-
-- String materialisation happens only when a value is actually needed (`new String(src, start, len, UTF_8)`).
-- Peek / next operate on `byte`; structural tokens are compared as `(byte) '{'`, etc.
-- Empty content and missing opening `{` are rejected early with clear structural failures.
+> **Arena lifetime:** the returned map holds its own copies of keys and values, so it remains valid after the
+> arena that held the source bytes is closed.
 
 ---
 
-## Related modules
+## Configuration guide
 
-| Module | Relationship |
-|--------|----------------|
-| `axiom` | Provides `PersistentMap`, `Dop`, `Result` |
-| `axiom-language` | Consumes this parser via `SchemaGuard` |
-| `axiom-spec` | Sibling parsers for CSV / JSON / SQL |
+`axiom-sovereign` has no configuration of its own. Behaviour to be aware of:
+
+| Situation | Behaviour |
+|---|---|
+| Empty input | Returns an empty map |
+| Input whose first non-whitespace byte is not `{` | Returns an empty map |
+| Structural error (missing `:` / `]` etc.) | Throws `RuntimeException` with byte position and a 30-byte context window |
+| Encoding | UTF-8 |
+
+If you want structural errors as values, wrap the call:
+
+```java
+Result<PersistentMap<String, Object>> doc =
+        Axiom.Check.attempt(() -> AxiomDopParser.take(segment).openBuffer().parse());
+```
+
+For validating **data against** a DOP schema, use [`axiom-language`](../axiom-language) (`SchemaGuard`).
 
 ---
 
-## Legal
+## License
 
-Limited Commercial License — free for evaluation, testing, and non-commercial development.  
-Commercial or production use requires a paid annual contract from Ensemblu Corp.
+**Limited Commercial License** — free for evaluation, testing, and non-commercial development.
+Commercial or production use requires a paid annual contract.
+See [LICENSE](https://raw.githubusercontent.com/ensemblu-corp/axiom/main/LICENSE) · Contact: contact@ensemblu.com
 
-See `LICENSE.md`. Contact: **contact@ensemblu.com**
+© Ensemblu Corp
